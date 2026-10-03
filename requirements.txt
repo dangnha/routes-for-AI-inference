@@ -1,13 +1,19 @@
+# Install CUDA PyTorch FIRST so the GPU build is used, e.g.:
+#   pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
 fastapi[standard]
 sqlalchemy>=2.0
 pydantic-settings>=2.0
-PyJWT>=2.8
-pwdlib[argon2]
-redis>=5.0
 psycopg[binary]>=3.1
 python-multipart>=0.0.9
-pytest>=8.0
+supabase>=2.0
 httpx>=0.27
+pytest>=8.0
 torch>=2.0
 torchvision>=0.15
+transformers>=4.40,<5.0
+accelerate>=0.30
+tiktoken>=0.7
 pillow>=10.0
+numpy>=1.24
+easyocr>=1.7
+verovio>=4.0

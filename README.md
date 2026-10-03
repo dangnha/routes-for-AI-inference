@@ -1,289 +1,271 @@
-# AI Inference Platform
+# Local AI Inference Platform
 
-A production-shaped FastAPI service that classifies handwritten digits with a
-small convolutional neural network, while exercising the full range of FastAPI
-engineering patterns: dependency injection, SQLAlchemy persistence, JWT
-authentication with role-based access control, background processing, Redis
-Pub/Sub events, and WebSocket real-time progress.
-
-> **Purpose.** This project is an implementation reference. Each FastAPI feature
-> maps to a concrete, idiomatic pattern rather than a toy abstraction. The model
-> is deliberately small (two convolutional layers, trained on MNIST) so the
-> entire stack runs on a laptop CPU — yet the HTTP and service boundaries are
-> designed to survive a swap to a larger or GPU-hosted model without touching the
-> API layer.
+A **fully local** OCR platform built in three tiers: **Streamlit** (UI) →
+**FastAPI + Supabase** (backend) → **AI service** (OCR models). Model weights are
+downloaded up front into the `models/` directory, so inference needs no cloud, and
+the AI service reports results back to the backend through a **webhook**.
 
 ---
 
-## Table of contents
+## Overview
 
-- [Features](#features)
-- [Architecture](#architecture)
-- [Project structure](#project-structure)
-- [Prerequisites](#prerequisites)
-- [Getting started](#getting-started)
-  - [Local development](#local-development)
-  - [Docker](#docker)
-- [Configuration](#configuration)
-- [API reference](#api-reference)
-- [End-to-end usage](#end-to-end-usage)
-- [Testing](#testing)
-- [Production hardening](#production-hardening)
-- [License](#license)
+- **Frontend** (`frontend/`) — Streamlit: sign in, pick a bundled example or upload
+  your own image, and view results (with bounding boxes for models that detect text
+  regions).
+- **Backend** (`backend/`) — FastAPI: authenticates via **Supabase Auth**, manages
+  tasks, issues **presigned URLs** so clients upload straight to **Supabase
+  Storage**, orchestrates inference, and receives results via webhook.
+- **AI service** (`ai_service/`) — FastAPI: three OCR models, one router each;
+  accepts async jobs and calls the backend back with the result.
+- **Supabase is the single data layer**: **Postgres** (tasks), **Auth** (users),
+  **Storage** (images). There is no local database.
 
----
+### OCR models
 
-## Features
+Three models with **different architectures**, all running locally:
 
-| Area | Implementation |
-| --- | --- |
-| Routing & validation | FastAPI `APIRouter`, Pydantic v2 models, typed response contracts |
-| Dependency injection | `Depends` + `Annotated` aliases for database sessions and auth |
-| Persistence | SQLAlchemy 2.0 ORM with session-per-request |
-| Authentication | JWT (HS256) access tokens, Argon2 password hashing |
-| Authorization | Role-based access control (`user` / `admin`) via dependency guards |
-| File upload | Streaming, size-capped uploads with content-type allow-listing |
-| Inference | Tiny CNN (`MnistCNN`) exposed behind a stable `MnistClassifier` interface |
-| Background work | `BackgroundTasks` with `asyncio.to_thread` to keep the event loop free |
-| Real-time events | Redis Pub/Sub fan-out to per-task WebSocket channels |
-| Observability | Request ID propagation and process-time headers via HTTP middleware |
-| Operations | Health/readiness endpoints, Dockerfile, Docker Compose, pytest suite |
+| Slug | Model (HF) | ~Params | Approach |
+| --- | --- | --- | --- |
+| `trocr` | `microsoft/trocr-base-printed` | 334M | Transformer encoder–decoder, **single line of printed text** |
+| `easyocr` | EasyOCR (CRAFT + CRNN) | ~100MB | **Detection + recognition** across multiple lines (receipts, signs) |
+| `gotocr` | `stepfun-ai/GOT-OCR2_0` | 580M | General OCR, outputs **Markdown** (layout/tables) |
 
----
+Models are **lazy-loaded** on first use and run on `INFERENCE_DEVICE` (default
+`cuda`). **GOT-OCR2.0 requires a GPU**, because the model's own code always moves
+tensors to CUDA.
 
-## Architecture
+### Project structure
 
 ```text
- Client ──REST + JWT──▶ FastAPI ────▶ PostgreSQL (task state)
-                         │
-                         ▼
-                  Background job
-                  MnistClassifier
-                         │
-                         ▼
-                 Redis Pub/Sub ──▶ WebSocket ──▶ Client
-```
-
-1. The client registers or signs in and receives a JWT.
-2. `POST /api/v1/tasks` validates and stores the upload, creates a `pending`
-   task record, and returns the task ID.
-3. A background job marks the task `running`, loads the image, runs the model,
-   and writes the outcome as `succeeded` or `failed`.
-4. Each state change is published to Redis; a per-task WebSocket subscribes to
-   the channel and streams progress back to the client.
-
-The database is the source of truth. If Redis is unavailable, inference still
-completes and the result is persisted — the event layer degrades gracefully.
-
----
-
-## Project structure
-
-```text
-fastapi-ai-platform/
-├── app/
-│   ├── __init__.py
-│   ├── main.py            # application factory, lifespan, middleware, routers
-│   ├── config.py          # pydantic-settings configuration
-│   ├── database.py        # engine, session factory, declarative base
-│   ├── dependencies.py    # DI aliases and auth guards
-│   ├── models.py          # SQLAlchemy ORM models
-│   ├── schemas.py         # Pydantic request/response models
-│   ├── security.py        # password hashing and JWT helpers
-│   ├── ml.py              # CNN definition and inference interface
-│   ├── services.py        # background inference pipeline + Redis publishing
-│   ├── websocket.py       # WebSocket task-progress endpoint
-│   └── routers/
-│       ├── __init__.py
-│       ├── auth.py        # registration and token issuance
-│       └── tasks.py       # task creation, listing, retrieval
+fastapi/
+├── frontend/                    # Tier 1 — Streamlit
+│   ├── app.py                   # main Streamlit app
+│   ├── client.py                # httpx client for the backend
+│   ├── samples.py               # maps each model to its example images
+│   ├── samples/                 # bundled examples (printed/multiline/document)
+│   └── requirements.txt
+├── backend/                     # Tier 2 — FastAPI + Supabase
+│   ├── app/
+│   │   ├── main.py              # app factory, middleware, health, routers
+│   │   ├── models.py            # SQLAlchemy ORM (tasks table only)
+│   │   ├── schemas.py           # Pydantic
+│   │   ├── core/                # config, database, auth (Supabase), errors
+│   │   ├── api/
+│   │   │   ├── deps.py          # DI + auth/RBAC guard
+│   │   │   └── routers/         # auth, uploads, models, tasks, webhooks
+│   │   └── services/            # storage, ai_client, inference
+│   └── tests/
+├── ai_service/                  # Tier 3 — OCR models
+│   ├── main.py
+│   ├── base.py                  # OCRProvider + OCRResult
+│   ├── config.py
+│   ├── routers.py               # one router per model: /infer + /jobs, /jobs/{id}
+│   ├── jobs.py                  # job registry + background execution
+│   ├── webhooks.py              # POSTs results back to the backend
+│   └── providers/               # encdec, trocr, easyocr, gotocr
 ├── scripts/
-│   └── train.py           # trains and persists the CNN artifact
-├── tests/
-│   ├── test_health.py
-│   └── test_model.py
-├── models/                # generated model artifacts (git-ignored)
-├── uploads/               # temporary upload staging (git-ignored)
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-└── .env.example
+│   ├── download_models.py       # download models into models/
+│   ├── make_samples.py          # generate the example images
+│   └── smoke_infer.py           # run each model on a sample (real output)
+├── models/                      # local model cache (not committed)
+├── requirements.txt             # backend + ai service
+├── pytest.ini
+├── .env.example
+└── README.md
 ```
 
 ---
 
-## Prerequisites
+## Requirements
 
 - Python 3.12+
-- Redis 7 (for WebSocket events; optional for core inference)
-- Docker and Docker Compose (for the containerized workflow)
+- **A Supabase project (required)** — Postgres + Auth + Storage
+- NVIDIA GPU (recommended) or CPU — GOT-OCR2.0 runs on GPU only
+- ~3 GB of disk for the models (`models/`)
 
 ---
 
-## Getting started
+## Setup
 
-### Local development
+Follow the steps in order. The three tiers run in three separate terminals (each
+with the virtualenv activated).
+
+### 1 — Clone
+
+```bash
+git clone <repo-url> && cd fastapi
+```
+
+### 2 — Create a virtualenv
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
 ```
 
-Train the CNN and produce the model artifact (downloads MNIST on first run):
+### 3 — Install PyTorch (CUDA)
+
+Install the CUDA build **first** so `easyocr` does not pull in the CPU build:
 
 ```bash
-python -m scripts.train
+pip install -U pip
+pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
 ```
 
-Start Redis:
+> On CPU: skip this step and set `INFERENCE_DEVICE=cpu` in step 5.
+
+### 4 — Install dependencies
 
 ```bash
-docker run --rm -d -p 6379:6379 redis:7-alpine
+pip install -r requirements.txt            # backend + ai service
+pip install -r frontend/requirements.txt   # Streamlit UI
 ```
 
-Configure and run:
+### 5 — Configure environment variables
 
 ```bash
 cp .env.example .env
-uvicorn app.main:app --reload
 ```
 
-The interactive API documentation is available at
-<http://localhost:8000/docs>.
+Open `.env` and fill in the **required** Supabase values:
 
-### Docker
+- `DATABASE_URL` — Supabase → **Connect** → **Session pooler**; keep the
+  `postgresql+psycopg://` prefix and insert the DB password.
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY` — used for Auth (project → **Settings → API**).
+- `SUPABASE_SERVICE_ROLE_KEY` — used for Storage.
+
+Everything else has sensible defaults for local development.
+
+> **Supabase Auth note:** go to *Authentication → Providers → Email* and turn off
+> **Confirm email** so users can sign in right after registering. To make an admin
+> account, set `app_metadata` = `{"role": "admin"}` for that user.
+
+### 6 — Download the models (one time)
 
 ```bash
-python -m scripts.train    # generate the model artifact first
-docker compose up --build
+python scripts/download_models.py
 ```
 
-Compose provisions the API, PostgreSQL, and Redis together.
+Downloads TrOCR and GOT-OCR2.0 into `models/hf/` and EasyOCR into
+`models/easyocr/`. After this, inference runs fully offline.
+
+### 7 — (Optional) Regenerate the example images
+
+The examples already ship in `frontend/samples/`. To regenerate them:
+
+```bash
+python scripts/make_samples.py
+```
+
+### 8 — Run the AI service (port 8001)
+
+```bash
+uvicorn ai_service.main:app --host 0.0.0.0 --port 8001
+```
+
+Docs: <http://localhost:8001/docs>
+
+### 9 — Run the backend (port 8000)
+
+```bash
+uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
+```
+
+Docs: <http://localhost:8000/docs>
+
+### 10 — Run the Streamlit frontend (port 8501)
+
+```bash
+streamlit run frontend/app.py --server.port 8501
+```
+
+Open the app: <http://localhost:8501>
+
+### 11 — Verify
+
+```bash
+curl http://localhost:8000/health   # {"status":"ok"}
+curl http://localhost:8000/ready    # {"status":"ready","ai_service":"ok"}
+```
+
+The backend creates the `inference_tasks` table and the `ocr-uploads` bucket on
+startup. Register an account with a real email in the UI, then try an example image.
 
 ---
 
-## Configuration
+## API
 
-Configuration is managed by `pydantic-settings` and read from environment
-variables or a `.env` file.
+### Backend
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `APP_NAME` | `AI Inference Platform` | Application title |
-| `ENVIRONMENT` | `development` | Runtime environment (`development` / `production`) |
-| `DATABASE_URL` | `sqlite:///./fastapi_ai.db` | SQLAlchemy connection string |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string |
-| `JWT_SECRET` | `change-me` | Secret used to sign JWTs |
-| `ACCESS_TOKEN_MINUTES` | `30` | Access token lifetime in minutes |
-| `CORS_ORIGINS` | `["http://localhost:3000"]` | Allowed CORS origins (JSON array) |
-| `MODEL_PATH` | `models/mnist_cnn.pt` | Path to the trained model weights |
+Every `/api/v1/*` endpoint (except register/login and the webhook) requires an
+`Authorization: Bearer <Supabase access token>` header.
 
-> `CORS_ORIGINS` is typed as `list[str]`, so its environment value must be a
-> JSON array. In production, `JWT_SECRET` must be replaced; startup refuses to
-> run otherwise.
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| `GET` | `/health` | — | Liveness probe |
+| `GET` | `/ready` | — | Readiness probe (DB + AI service) |
+| `POST` | `/api/v1/auth/register` | — | Register via Supabase Auth (email + password) |
+| `POST` | `/api/v1/auth/token` | — | Exchange email + password for an access token |
+| `POST` | `/api/v1/uploads/presign` | Bearer | Get a presigned URL + object key (Supabase Storage) |
+| `GET` | `/api/v1/models` | Bearer | List available models |
+| `POST` | `/api/v1/tasks` | Bearer | Create a task from an uploaded object key |
+| `GET` | `/api/v1/tasks` | Bearer | List the user's tasks (paginated) |
+| `GET` | `/api/v1/tasks/admin/all` | admin | All tasks (RBAC demo) |
+| `GET` | `/api/v1/tasks/{task_id}` | Bearer | Task detail (owner or admin) |
+| `POST` | `/api/v1/webhooks/inference` | `X-Webhook-Secret` | AI service reports a finished job |
 
----
-
-## API reference
-
-All endpoints are documented interactively at `/docs`.
-
-### System
+### AI service
 
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe |
-| `GET` | `/ready` | Readiness probe (DB connectivity + model loaded) |
-
-### Authentication
-
-| Method | Path | Description |
-| --- | --- | --- |
-| `POST` | `/api/v1/auth/register` | Create a user account |
-| `POST` | `/api/v1/auth/token` | Obtain a JWT (OAuth2 password flow) |
-
-### Tasks
-
-| Method | Path | Auth | Description |
-| --- | --- | --- | --- |
-| `POST` | `/api/v1/tasks` | Bearer | Upload an image and enqueue inference |
-| `GET` | `/api/v1/tasks` | Bearer | List the caller's tasks (paginated) |
-| `GET` | `/api/v1/tasks/{task_id}` | Bearer | Retrieve a task (owner or admin) |
-
-### WebSocket
-
-| Path | Description |
-| --- | --- |
-| `/ws/tasks/{task_id}?token={token}` | Stream task status/progress events |
+| `GET` | `/models` | List models |
+| `POST` | `/models/{slug}/infer` | Synchronous inference (JSON) — handy for testing |
+| `POST` | `/models/{slug}/jobs` | Accept an async job + `callback_url` |
+| `GET` | `/jobs/{job_id}` | Job status |
 
 ---
 
-## End-to-end usage
+## Environment variables
 
-```bash
-# 1. Register a user
-curl -X POST http://localhost:8000/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"researcher","password":"strong-pass-123"}'
+Loaded from `.env` via `pydantic-settings`.
 
-# 2. Obtain an access token
-TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=researcher&password=strong-pass-123" | jq -r .access_token)
+### Backend
 
-# 3. Submit an image for inference
-curl -X POST http://localhost:8000/api/v1/tasks \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "file=@digit.png"
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DATABASE_URL` | *(required)* | Supabase Postgres URL (`postgresql+psycopg://…`) |
+| `SUPABASE_URL` | *(required)* | Supabase project URL |
+| `SUPABASE_ANON_KEY` | *(required)* | Anon key (Supabase Auth) |
+| `SUPABASE_SERVICE_ROLE_KEY` | *(required)* | Service role key (Supabase Storage) |
+| `SUPABASE_STORAGE_BUCKET` | `ocr-uploads` | Bucket name |
+| `WEBHOOK_SECRET` | `change-me` | Secret for the webhook (`X-Webhook-Secret`) |
+| `AI_SERVICE_URL` | `http://localhost:8001` | AI service URL |
+| `AI_CALLBACK_BASE_URL` | `http://localhost:8000` | URL the AI service calls back to |
 
-# 4. Poll for the result
-curl http://localhost:8000/api/v1/tasks \
-  -H "Authorization: Bearer $TOKEN"
-```
+### Frontend
 
-To observe progress in real time, open a WebSocket connection to
-`ws://localhost:8000/ws/tasks/{task_id}?token={token}` immediately after task
-creation. A production frontend should connect as soon as the task ID is
-returned, render the initial state, and reconnect with backoff on network loss.
+| Variable | Default | Description |
+| --- | --- | --- |
+| `BACKEND_URL` | `http://localhost:8000` | Backend URL (read by `frontend/app.py`) |
+
+### AI service
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `INFERENCE_DEVICE` | `cuda` | `cpu` or `cuda` |
+| `WEBHOOK_SECRET` | `change-me` | Secret sent with the callback (must match the backend) |
+| `TROCR_MODEL_ID` | `microsoft/trocr-base-printed` | TrOCR checkpoint |
+| `GOTOCR_MODEL_ID` | `stepfun-ai/GOT-OCR2_0` | GOT-OCR2.0 checkpoint |
+| `EASYOCR_LANGS` | `["en"]` | EasyOCR languages |
+| `MAX_LENGTH` | `256` | Max text length (TrOCR) |
 
 ---
 
 ## Testing
 
 ```bash
-pytest
+pytest                 # unit tests (no models / Supabase needed)
+pytest -m slow         # integration: needs the AI service running + models downloaded
+python scripts/smoke_infer.py    # print each model's real output on a sample image
 ```
-
-The suite covers the health endpoint and the model interface. A full
-production test matrix would additionally cover database fixtures, dependency
-overrides, ownership and RBAC enforcement, upload size limits, task state
-transitions, Redis failure modes, and WebSocket behavior.
-
----
-
-## Production hardening
-
-The current implementation uses `BackgroundTasks`, local disk storage, and
-`Base.metadata.create_all` as deliberate learning simplifications. To move to
-production, replace them behind the same interfaces:
-
-| Component | Learning choice | Production direction |
-| --- | --- | --- |
-| Background job | `BackgroundTasks` | Durable task queue with dedicated workers |
-| File storage | Local disk | Object storage with lifecycle policies and malware scanning |
-| Schema | `create_all` | Alembic migrations in CI/CD |
-| Model | In-process CNN | Separate model server/GPU worker, batching, versioning |
-| Events | Redis Pub/Sub | Pub/Sub or durable streams per requirements |
-| Auth | Access JWT | Rotation, refresh/revocation, audit, external IdP |
-| Observability | Timing headers | Structured logs, metrics, tracing, alerts, SLOs |
-| Deployment | Docker Compose | Reverse proxy, load balancer, orchestrator |
-
-The HTTP contract and the `MnistClassifier.predict` boundary are designed so
-that these upgrades are replacements, not rewrites.
-
----
-
-## License
-
-This project is provided as an educational reference implementation.
