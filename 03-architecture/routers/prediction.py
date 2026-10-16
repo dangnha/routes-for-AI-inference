@@ -1,0 +1,23 @@
+"""ROUTER LAYER - declare endpoints and handle HTTP."""
+
+from fastapi import APIRouter, Depends, Request
+
+from schemas.prediction import IrisFeatures
+from services.prediction_service import PredictionService
+
+router = APIRouter(tags=["prediction"])
+
+
+def get_service(request: Request) -> PredictionService:
+    """Dependency: fetch the service built at startup (stored on app.state)."""
+    return request.app.state.prediction_service
+
+
+@router.get("/info", summary="Model information")
+def info(service: PredictionService = Depends(get_service)):
+    return service.model_info()
+
+
+@router.post("/predict", summary="Predict the Iris species")
+def predict(payload: IrisFeatures, service: PredictionService = Depends(get_service)):
+    return service.predict(payload)

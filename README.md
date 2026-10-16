@@ -1,271 +1,183 @@
-# Local AI Inference Platform
+# AIO2026 · Module 05 — Serving AI Models with FastAPI
 
-A **fully local** OCR platform built in three tiers: **Streamlit** (UI) →
-**FastAPI + Supabase** (backend) → **AI service** (OCR models). Model weights are
-downloaded up front into the `models/` directory, so inference needs no cloud, and
-the AI service reports results back to the backend through a **webhook**.
+## 1. Introduction
 
----
+This module answers one question: **how do other people (a UI, a mobile app, a teammate) call my
+AI model?** The answer is to turn the model into a **service** exposed through a **REST API** built
+with **FastAPI**.
 
-## Overview
+Every folder below is a self-contained part of the lesson with its own `README.md`,
+`requirements.txt`, a FastAPI **backend** (`main.py`) and a **Streamlit** client (`app.py`).
 
-- **Frontend** (`frontend/`) — Streamlit: sign in, pick a bundled example or upload
-  your own image, and view results (with bounding boxes for models that detect text
-  regions).
-- **Backend** (`backend/`) — FastAPI: authenticates via **Supabase Auth**, manages
-  tasks, issues **presigned URLs** so clients upload straight to **Supabase
-  Storage**, orchestrates inference, and receives results via webhook.
-- **AI service** (`ai_service/`) — FastAPI: three OCR models, one router each;
-  accepts async jobs and calls the backend back with the result.
-- **Supabase is the single data layer**: **Postgres** (tasks), **Auth** (users),
-  **Storage** (images). There is no local database.
+| # | Folder | Topic | API port | Streamlit |
+|---|--------|-------|----------|-----------|
+| 1 | [`simple-api/`](./simple-api) | Turn a plain **Python function** into an API (client–server, what an API is) — no body, no schema, no error handling | 8000 | `app.py` |
+| 2 | [`serve-model/`](./serve-model) | Serve a **pretrained ML model** (Logistic Regression / Iris) | 8001 | `app.py` |
+| 3 | [`validate-input/`](./validate-input) | **Validate input** with Pydantic schemas + introduce `APIRouter` (HTTP 422) | 8002 | `app.py` |
+| 4 | [`architecture/`](./architecture) | **Pure refactor of Part 3**: split the code by layer: routers / schemas / services / models | 8003 | `app.py` |
+| 5 | [`response-contract/`](./response-contract) | **Response contract**: `response_model` + status codes 200/400/404/422/500 | 8004 | `app.py` |
+| 6 | [`multi-model-server/`](./multi-model-server) | **Multi-model AI server**: OCR + classification + detection (**final project**) | 8005 | `app.py` (fancy) |
 
-### OCR models
+**Story of the lesson** — each part adds exactly one idea:
 
-Three models with **different architectures**, all running locally:
+1. **Simple problem** — we have a Python function. How can others call it? → API, client–server, FastAPI (keep it minimal).
+2. **Serve a model** — a model is not a calculation: it must be loaded, fed the right features, and run through inference.
+3. **Validate input** — what if the client sends missing/wrong data? → Pydantic schema + automatic 422, and group the endpoints on an `APIRouter`.
+4. **Architecture** — the *same* code as Part 3, just split into layers (routers / schemas / services / models).
+5. **Response contract** — the model's output is not the API's output; declare the response and use meaningful status codes.
+6. **Multi-model server** — many models (including images and OCR), device choice, lifecycle management, and a polished UI.
 
-| Slug | Model (HF) | ~Params | Approach |
-| --- | --- | --- | --- |
-| `trocr` | `microsoft/trocr-base-printed` | 334M | Transformer encoder–decoder, **single line of printed text** |
-| `easyocr` | EasyOCR (CRAFT + CRNN) | ~100MB | **Detection + recognition** across multiple lines (receipts, signs) |
-| `gotocr` | `stepfun-ai/GOT-OCR2_0` | 580M | General OCR, outputs **Markdown** (layout/tables) |
+**All models run locally** (loaded in the FastAPI process with `torch`, `onnxruntime` or
+`scikit-learn`). No remote inference API is used.
 
-Models are **lazy-loaded** on first use and run on `INFERENCE_DEVICE` (default
-`cuda`). **GOT-OCR2.0 requires a GPU**, because the model's own code always moves
-tensors to CUDA.
+## 2. Setup guide
 
-### Project structure
+### Prerequisites
 
-```text
-fastapi/
-├── frontend/                    # Tier 1 — Streamlit
-│   ├── app.py                   # main Streamlit app
-│   ├── client.py                # httpx client for the backend
-│   ├── samples.py               # maps each model to its example images
-│   ├── samples/                 # bundled examples (printed/multiline/document)
-│   └── requirements.txt
-├── backend/                     # Tier 2 — FastAPI + Supabase
-│   ├── app/
-│   │   ├── main.py              # app factory, middleware, health, routers
-│   │   ├── models.py            # SQLAlchemy ORM (tasks table only)
-│   │   ├── schemas.py           # Pydantic
-│   │   ├── core/                # config, database, auth (Supabase), errors
-│   │   ├── api/
-│   │   │   ├── deps.py          # DI + auth/RBAC guard
-│   │   │   └── routers/         # auth, uploads, models, tasks, webhooks
-│   │   └── services/            # storage, ai_client, inference
-│   └── tests/
-├── ai_service/                  # Tier 3 — OCR models
-│   ├── main.py
-│   ├── base.py                  # OCRProvider + OCRResult
-│   ├── config.py
-│   ├── routers.py               # one router per model: /infer + /jobs, /jobs/{id}
-│   ├── jobs.py                  # job registry + background execution
-│   ├── webhooks.py              # POSTs results back to the backend
-│   └── providers/               # encdec, trocr, easyocr, gotocr
-├── scripts/
-│   ├── download_models.py       # download models into models/
-│   ├── make_samples.py          # generate the example images
-│   └── smoke_infer.py           # run each model on a sample (real output)
-├── models/                      # local model cache (not committed)
-├── requirements.txt             # backend + ai service
-├── pytest.ini
-├── .env.example
-└── README.md
-```
+- Python **3.10+** (3.12 recommended)
+- Ability to run two terminals per part (one for the API, one for Streamlit)
 
----
-
-## Requirements
-
-- Python 3.12+
-- **A Supabase project (required)** — Postgres + Auth + Storage
-- NVIDIA GPU (recommended) or CPU — GOT-OCR2.0 runs on GPU only
-- ~3 GB of disk for the models (`models/`)
-
----
-
-## Setup
-
-Follow the steps in order. The three tiers run in three separate terminals (each
-with the virtualenv activated).
-
-### 1 — Clone
+### General pattern (apply to each part)
 
 ```bash
-git clone <repo-url> && cd fastapi
-```
-
-### 2 — Create a virtualenv
-
-```bash
+cd <part-folder>
 python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
 source .venv/bin/activate
+
+pip install -r requirements.txt
 ```
 
-### 3 — Install PyTorch (CUDA)
-
-Install the CUDA build **first** so `easyocr` does not pull in the CPU build:
+Then, for parts 2–6 only, build the small classifier model once:
 
 ```bash
-pip install -U pip
-pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision
+python train_model.py
 ```
 
-> On CPU: skip this step and set `INFERENCE_DEVICE=cpu` in step 5.
-
-### 4 — Install dependencies
+Start the backend:
 
 ```bash
-pip install -r requirements.txt            # backend + ai service
-pip install -r frontend/requirements.txt   # Streamlit UI
+uvicorn main:app --reload --port <port>     # see the table above
 ```
 
-### 5 — Configure environment variables
+Start the UI in a second terminal:
 
 ```bash
-cp .env.example .env
+streamlit run app.py
 ```
 
-Open `.env` and fill in the **required** Supabase values:
+Open the API docs at `http://127.0.0.1:<port>/docs` and the UI at <http://localhost:8501>.
 
-- `DATABASE_URL` — Supabase → **Connect** → **Session pooler**; keep the
-  `postgresql+psycopg://` prefix and insert the DB password.
-- `SUPABASE_URL`, `SUPABASE_ANON_KEY` — used for Auth (project → **Settings → API**).
-- `SUPABASE_SERVICE_ROLE_KEY` — used for Storage.
+### Quick start per part
 
-Everything else has sensible defaults for local development.
+| Part | Port | Command |
+|------|------|---------|
+| simple-api | 8000 | `uvicorn main:app --reload --port 8000` |
+| serve-model | 8001 | `python train_model.py` then `uvicorn main:app --reload --port 8001` |
+| validate-input | 8002 | `python train_model.py` then `uvicorn main:app --reload --port 8002` |
+| architecture | 8003 | `python train_model.py` then `uvicorn main:app --reload --port 8003` |
+| response-contract | 8004 | `python train_model.py` then `uvicorn main:app --reload --port 8004` |
+| multi-model-server | 8005 | `python train_model.py` then `uvicorn main:app --reload --port 8005` |
 
-> **Supabase Auth note:** go to *Authentication → Providers → Email* and turn off
-> **Confirm email** so users can sign in right after registering. To make an admin
-> account, set `app_metadata` = `{"role": "admin"}` for that user.
+> To run two Streamlit apps at the same time, give each one a port:
+> `streamlit run app.py --server.port 8502`.
 
-### 6 — Download the models (one time)
+### Part 6 (final project) in short
 
 ```bash
-python scripts/download_models.py
+cd multi-model-server
+pip install -r requirements.txt
+python download_models.py                    # fetch all weights into model_cache/
+python train_model.py
+uvicorn main:app --reload --port 8005      # terminal 1
+streamlit run app.py                        # terminal 2
 ```
 
-Downloads TrOCR and GOT-OCR2.0 into `models/hf/` and EasyOCR into
-`models/easyocr/`. After this, inference runs fully offline.
+In the UI: pick a **device** (CPU or GPU) and an **OCR model**, then upload an image or click a
+**sample invoice**. Start the backend with `set MMS_OFFLINE=1` to run fully from the local cache
+(no network). To demo without any model weights at all: `set MMS_MOCK=1`.
 
-### 7 — (Optional) Regenerate the example images
+## 3. Code structure
 
-The examples already ship in `frontend/samples/`. To regenerate them:
-
-```bash
-python scripts/make_samples.py
+```
+Module 05/code/
+├── README.md
+├── .gitignore
+├── simple-api/
+│   ├── main.py              # get_items() + GET /items (basic GET, returns a list)
+│   ├── app.py               # Streamlit client
+│   └── requirements.txt
+├── serve-model/
+│   ├── train_model.py       # TRAINING: fit + save model.pkl
+│   ├── main.py              # INFERENCE: load model once, POST /predict
+│   ├── app.py  requirements.txt
+├── validate-input/
+│   ├── main.py              # the whole API in ONE file (Pydantic schema + APIRouter + endpoint)
+│   ├── train_model.py  app.py  requirements.txt
+├── architecture/
+│   ├── main.py              # create app + register routers
+│   ├── routers/  schemas/  services/  models/
+│   ├── train_model.py  app.py  requirements.txt
+├── response-contract/
+│   ├── main.py              # app + error handlers
+│   ├── routers/  schemas/  services/  models/
+│   ├── train_model.py  app.py  requirements.txt
+└── multi-model-server/      # FINAL PROJECT
+    ├── main.py              # app + routers + error handlers
+    ├── app.py               # fancy Streamlit UI
+    ├── core/                # config, errors, backend check
+    ├── routers/             # ocr.py, classification.py, detection.py, system.py
+    ├── schemas/             # Pydantic contracts
+    ├── services/            # ocr_service, classification_service, detection_service, preprocess
+    ├── models/              # registry + wrappers (RapidOCR, TrOCR, YOLOS, sklearn)
+    ├── download_models.py   # pre-downloads all weights into model_cache/
+    ├── train_model.py  requirements.txt
 ```
 
-### 8 — Run the AI service (port 8001)
+The dependency direction always goes **outer → inner** (`routers → services → models`), which keeps
+each part easy to change and test.
 
-```bash
-uvicorn ai_service.main:app --host 0.0.0.0 --port 8001
-```
+## 4. Additional information
 
-Docs: <http://localhost:8001/docs>
+### Default ports
 
-### 9 — Run the backend (port 8000)
+API: 8000–8005 (one per part). Streamlit: 8501 (use `--server.port` to change).
 
-```bash
-uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
-```
+### Part 6 models
 
-Docs: <http://localhost:8000/docs>
+| Name | Engine | Device | Notes |
+|------|--------|--------|-------|
+| `rapidocr` | RapidOCR (ONNX) | cpu | Full-page OCR, fast, best for invoices on CPU |
+| `trocr-base-printed` | TrOCR | cpu / cuda | Printed text per line, ~334M |
 
-### 10 — Run the Streamlit frontend (port 8501)
+All weights are downloaded once by `download_models.py` into the project-local
+`model_cache/` folder; the server loads them from there and can run with `MMS_OFFLINE=1`.
 
-```bash
-streamlit run frontend/app.py --server.port 8501
-```
+Sample invoices (already wired to buttons in the UI):
 
-Open the app: <http://localhost:8501>
+1. https://imgv2-2-f.scribdassets.com/img/document/558034587/original/cf20b8ea94/1?v=1
+2. https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS5YP2LMDSFPIh2c36w9MILmGcfO5vAletMNbkBD0OqBtCciXk7c11yG5Ba&s=10
+3. https://d2czqxs5dso3qv.cloudfront.net/images/85f1e89b-dea6-4c9c-aa6e-9051527a67f8.png
 
-### 11 — Verify
+### Troubleshooting (Part 6, image models)
 
-```bash
-curl http://localhost:8000/health   # {"status":"ok"}
-curl http://localhost:8000/ready    # {"status":"ready","ai_service":"ok"}
-```
+1. **`ImportError: operator torchvision::nms does not exist`**
+   `torch` and `torchvision` versions do not match. Install a matching pair, e.g.
+   `torch 2.5.1` ↔ `torchvision 0.20.1`: `pip install --upgrade torchvision`.
+2. **`cannot import name 'ReasoningEffort' from 'mistral_common...'`** (transformers 5.x)
+   → `pip install --upgrade mistral-common`.
+3. **`torch.load ... require users to upgrade torch to at least v2.6`**
+   a model ships `.bin` weights and `torch < 2.6`. The OCR models here ship `safetensors`, so they
+   work.
+4. **UI shows "server offline"** → start the backend first and check the *API base URL* in the sidebar.
 
-The backend creates the `inference_tasks` table and the `ocr-uploads` bucket on
-startup. Register an account with a real email in the UI, then try an example image.
+The server never crashes: image endpoints return **503** with a clear message when a backend is
+missing, and you can always demo with `MMS_MOCK=1`.
 
----
+### Notes
 
-## API
-
-### Backend
-
-Every `/api/v1/*` endpoint (except register/login and the webhook) requires an
-`Authorization: Bearer <Supabase access token>` header.
-
-| Method | Path | Auth | Description |
-| --- | --- | --- | --- |
-| `GET` | `/health` | — | Liveness probe |
-| `GET` | `/ready` | — | Readiness probe (DB + AI service) |
-| `POST` | `/api/v1/auth/register` | — | Register via Supabase Auth (email + password) |
-| `POST` | `/api/v1/auth/token` | — | Exchange email + password for an access token |
-| `POST` | `/api/v1/uploads/presign` | Bearer | Get a presigned URL + object key (Supabase Storage) |
-| `GET` | `/api/v1/models` | Bearer | List available models |
-| `POST` | `/api/v1/tasks` | Bearer | Create a task from an uploaded object key |
-| `GET` | `/api/v1/tasks` | Bearer | List the user's tasks (paginated) |
-| `GET` | `/api/v1/tasks/admin/all` | admin | All tasks (RBAC demo) |
-| `GET` | `/api/v1/tasks/{task_id}` | Bearer | Task detail (owner or admin) |
-| `POST` | `/api/v1/webhooks/inference` | `X-Webhook-Secret` | AI service reports a finished job |
-
-### AI service
-
-| Method | Path | Description |
-| --- | --- | --- |
-| `GET` | `/health` | Liveness probe |
-| `GET` | `/models` | List models |
-| `POST` | `/models/{slug}/infer` | Synchronous inference (JSON) — handy for testing |
-| `POST` | `/models/{slug}/jobs` | Accept an async job + `callback_url` |
-| `GET` | `/jobs/{job_id}` | Job status |
-
----
-
-## Environment variables
-
-Loaded from `.env` via `pydantic-settings`.
-
-### Backend
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `DATABASE_URL` | *(required)* | Supabase Postgres URL (`postgresql+psycopg://…`) |
-| `SUPABASE_URL` | *(required)* | Supabase project URL |
-| `SUPABASE_ANON_KEY` | *(required)* | Anon key (Supabase Auth) |
-| `SUPABASE_SERVICE_ROLE_KEY` | *(required)* | Service role key (Supabase Storage) |
-| `SUPABASE_STORAGE_BUCKET` | `ocr-uploads` | Bucket name |
-| `WEBHOOK_SECRET` | `change-me` | Secret for the webhook (`X-Webhook-Secret`) |
-| `AI_SERVICE_URL` | `http://localhost:8001` | AI service URL |
-| `AI_CALLBACK_BASE_URL` | `http://localhost:8000` | URL the AI service calls back to |
-
-### Frontend
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `BACKEND_URL` | `http://localhost:8000` | Backend URL (read by `frontend/app.py`) |
-
-### AI service
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `INFERENCE_DEVICE` | `cuda` | `cpu` or `cuda` |
-| `WEBHOOK_SECRET` | `change-me` | Secret sent with the callback (must match the backend) |
-| `TROCR_MODEL_ID` | `microsoft/trocr-base-printed` | TrOCR checkpoint |
-| `GOTOCR_MODEL_ID` | `stepfun-ai/GOT-OCR2_0` | GOT-OCR2.0 checkpoint |
-| `EASYOCR_LANGS` | `["en"]` | EasyOCR languages |
-| `MAX_LENGTH` | `256` | Max text length (TrOCR) |
-
----
-
-## Testing
-
-```bash
-pytest                 # unit tests (no models / Supabase needed)
-pytest -m slow         # integration: needs the AI service running + models downloaded
-python scripts/smoke_infer.py    # print each model's real output on a sample image
-```
+- Code comments may be in Vietnamese; the **UI, API docs and READMEs are in English**.
+- Generated artifacts (`model.pkl`, `model_meta.json`) are created by `train_model.py` and are
+  git-ignored.
