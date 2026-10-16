@@ -10,7 +10,9 @@ models behind one FastAPI app **without turning the API into a mess**.
 - **One wrapper per model** in `models/`, all sharing the same `load / predict / unload` contract.
 - **A registry** that manages the model lifecycle (lazy load per device, release on demand).
 - **A service per task** that orchestrates preprocess → model → response.
-- **A Streamlit UI** (the final project UI) that talks to the local server.
+- **A Streamlit UI** that focuses on **OCR** (the main use case). Classification and detection are
+  still served by the backend — they are simply not surfaced in the UI; use Swagger
+  (`/docs`) or `smoke_test.py` to test them.
 
 **Everything runs locally.** Models are loaded in the server process with `torch`,
 `onnxruntime` or `scikit-learn`. No remote inference API is used.
@@ -27,33 +29,92 @@ You never touch the encoder/decoder. You only: (1) give the model a correctly fo
 
 ### Available models
 
-The server ships **two OCR models**, both running locally:
+Both OCR models are **lightweight** and run locally:
 
-| Name | Engine | Kind | Device | Notes |
-|------|--------|------|--------|-------|
-| `rapidocr` | RapidOCR (ONNX) | document | **cpu** | Full-page detect + read. Fast, best for invoices on CPU. |
-| `trocr-base-printed` | TrOCR | line | cpu, cuda | Printed text, ~334M, accurate transformer. |
+| Name | Engine | Kind | Device | Size | Notes |
+|------|--------|------|--------|------|-------|
+| `rapidocr` | RapidOCR (ONNX) | document | **cpu** | ~16 MB (bundled) | Full-page detect + read. Fast, best for invoices on CPU. |
+| `trocr-small-printed` | TrOCR small | line | cpu, cuda | ~246 MB (~62M params) | Printed text, one line at a time. |
 
 - **`line` models** need the page split into lines first (horizontal projection in
   `services/preprocess.py`).
 - **`document` models** read the whole page at once.
-- All weights are downloaded once by `download_models.py` into a **project-local cache**
-  (`model_cache/`); the server then loads them from there, so nothing is fetched at request time.
-- Detection uses `hustvl/yolos-tiny` (`pytorch`). It is COCO-trained, so invoice photos usually
+- Object detection uses `hustvl/yolos-tiny` (~26 MB). It is COCO-trained, so invoice photos usually
   return **0 objects** — use a normal photo with people/cars to see boxes.
+
+### Downloading and where the files go
+
+`download_models.py` downloads every model into **one tidy folder per model** inside the project,
+so nothing lands in the global Hugging Face cache and the server can run with `MMS_OFFLINE=1`:
+
+```
+model_cache/
+├── trocr-small-printed/     # config.json, model.safetensors, tokenizer files ...
+└── yolos-tiny/              # config.json, model.safetensors, preprocessor_config.json
+```
+
+Only `model.safetensors` is fetched (the duplicate `pytorch_model.bin` is skipped), so the cache
+stays small. Delete `model_cache/` at any time to re-download from scratch.
+
+RapidOCR keeps its tiny (~16 MB) ONNX weights inside the installed package, so it needs no folder.
 
 ### Choosing the device
 
 The UI (and the API) lets you pick **CPU or GPU** for OCR:
 
 - `rapidocr` → CPU only (ONNX Runtime).
-- `trocr-base-printed` → CPU or cuda (PyTorch).
+- `trocr-small-printed` → CPU or cuda (PyTorch).
 
 Only devices that actually exist on the machine are offered (`GET /devices`).
 
 ## 2. Setup guide
 
 Follow these steps in order.
+
+### Step 0 — Hugging Face token
+
+The models here are public, but a token makes downloads reliable (higher rate limits) and is
+required if you later point the server at a **gated/private** repo. The server and the download
+script read the token automatically from:
+
+1. the `HF_TOKEN` environment variable, or
+2. a project-local **`.env`** file, or
+3. a token saved by `hf auth login` (a.k.a. `huggingface-cli login`).
+
+The easiest option is a `.env` file in `multi-model-server/` (**git-ignored**, so it is never
+committed):
+
+```bash
+# multi-model-server/.env
+HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+<details>
+<summary>Or set the environment variable directly</summary>
+
+```bash
+# Windows (PowerShell)
+$env:HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Windows (cmd.exe)
+set HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# macOS / Linux
+export HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+</details>
+
+<details>
+<summary>Or log in once with the Hugging Face CLI</summary>
+
+```bash
+pip install -U huggingface_hub
+hf auth login          # paste the token when prompted
+```
+</details>
+
+Get a token at <https://huggingface.co/settings/tokens>. A **read** token
+(`repo.content.read`) is enough.
 
 ### Step 1 — Create and activate a virtual environment
 
@@ -82,9 +143,13 @@ pip install -r requirements.txt
 python download_models.py
 ```
 
-This fetches the two OCR models and the detector into the **project-local cache** (`model_cache/`).
-Re-running it is safe: already-downloaded models are skipped. To prove the server never uses the
-network afterwards, start it with `MMS_OFFLINE=1`.
+This fetches the two OCR models and the detector into `model_cache/` (one folder per model).
+Re-running it is safe: already-downloaded files are skipped. You can also fetch one group:
+
+```bash
+python download_models.py ocr          # only the OCR models
+python download_models.py detection    # only the detector
+```
 
 ### Step 4 — Train the small classifier (once)
 
@@ -114,8 +179,25 @@ Streamlit opens <http://localhost:8501>. In the sidebar make sure **API base URL
 ### Step 7 — Try it
 
 1. Choose a **device** (CPU or GPU) and an **OCR model** in the sidebar.
-2. In the **OCR** tab, upload an image or click a **sample invoice**, then press **Run OCR**.
-3. Try the **Classification** and **Detection** tabs too.
+2. Upload an image or click a **sample invoice**, then press **Run OCR**.
+3. Read the extracted text (and, for `rapidocr`, the detected text regions).
+
+Classification and detection are **not** in the UI. Test them from the API instead:
+
+- Swagger UI: <http://127.0.0.1:8005/docs> → try `POST /classification/predict` and
+  `POST /detection/upload`.
+- Or run the automated smoke test (below).
+
+### Step 8 — Test the whole backend (recommended)
+
+With the server running, in a second terminal:
+
+```bash
+python smoke_test.py
+```
+
+It builds a small invoice in memory and checks every endpoint (OCR, classification, detection),
+printing a PASS/FAIL summary.
 
 ### Optional — run without downloading model weights
 
@@ -131,11 +213,12 @@ uvicorn main:app --port 8005
 ```
 multi-model-server/
 ├── main.py                      # create app, register routers, error handlers
-├── app.py                       # Streamlit UI (client)
+├── app.py                       # Streamlit UI (client) — OCR only
 ├── download_models.py           # pre-downloads all model weights into model_cache/
+├── smoke_test.py                # PASS/FAIL check for every backend endpoint
 ├── train_model.py               # builds model.pkl for the classifier
 ├── core/
-│   ├── config.py                # model specs, devices, cache dir, env vars
+│   ├── config.py                # model specs, devices, cache dir, env vars, HF token
 │   ├── errors.py                # domain errors carrying an HTTP status code
 │   └── env_check.py             # clear error if the vision backend is broken
 ├── routers/
@@ -174,17 +257,17 @@ Streamlit UI  --POST /ocr/upload (file, model, device)-->  routers/ocr.py
 
 ### API summary
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/health` | liveness + default device |
-| GET | `/devices` | devices available on this machine |
-| GET | `/models` | status of every model (and where it is loaded) |
-| POST | `/models/{name}/unload` | release a model from memory |
-| GET | `/ocr/models` | list OCR models, engines and devices |
-| POST | `/ocr/upload` | OCR an uploaded image |
-| GET | `/classification/info` | classifier description |
-| POST | `/classification/predict` | predict Iris species |
-| POST | `/detection/upload` | detect objects in an image |
+| Method | Path | Purpose | In the UI? |
+|--------|------|---------|------------|
+| GET | `/health` | liveness + default device | sidebar |
+| GET | `/devices` | devices available on this machine | sidebar |
+| GET | `/models` | status of every model (and where it is loaded) | sidebar |
+| POST | `/models/{name}/unload` | release a model from memory | sidebar |
+| GET | `/ocr/models` | list OCR models, engines and devices | sidebar |
+| POST | `/ocr/upload` | OCR an uploaded image | **yes** |
+| GET | `/classification/info` | classifier description | no (API only) |
+| POST | `/classification/predict` | predict Iris species | no (API only) |
+| POST | `/detection/upload` | detect objects in an image | no (API only) |
 
 All errors use one contract:
 
@@ -216,6 +299,7 @@ uploads the file to the server, so the server never needs to fetch anything from
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
+| `HF_TOKEN` | – | Hugging Face token used to download models (see Step 0) |
 | `MMS_DEVICE` | `auto` | Default device: `cpu` / `cuda` / `mps` |
 | `MMS_MOCK` | `0` | `1` = do not download models, return canned results |
 | `MMS_OFFLINE` | `0` | `1` = load models from the local cache only (never touch the network) |
@@ -239,7 +323,9 @@ uploads the file to the server, so the server never needs to fetch anything from
 3. **`torch.load ... require users to upgrade torch to at least v2.6`**
    a model only ships `.bin` weights and `torch < 2.6`. The OCR models used here ship
    `safetensors`, so they are fine.
-4. **UI says "server offline"** → start `uvicorn main:app --port 8005` first and check the
+4. **Download fails or hangs** → set a Hugging Face token (Step 0). The downloader already
+   disables Xet (`HF_HUB_DISABLE_XET=1`), which is more reliable on OneDrive / network drives.
+5. **UI says "server offline"** → start `uvicorn main:app --port 8005` first and check the
    API base URL in the sidebar.
 
 In all cases the server never crashes: the endpoint returns **503** with a clear message, and you

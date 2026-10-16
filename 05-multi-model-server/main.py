@@ -76,7 +76,9 @@ app = FastAPI(
     title="Multi-model AI Server",
     description=(
         "A FastAPI server exposing OCR, classification and detection models that run locally. "
-        "Choose the device (CPU or GPU) per request where the model supports it."
+        "Choose the device (CPU or GPU) per request where the model supports it. "
+        "The Streamlit UI is OCR-only; the classification and detection endpoints are meant to be "
+        "called directly (Swagger UI or smoke_test.py)."
     ),
     version="1.0.0",
     lifespan=lifespan,

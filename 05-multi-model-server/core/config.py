@@ -1,9 +1,9 @@
 """
 Central configuration for the multi-model server.
 
-Everything that can change per environment (model ids, device, thresholds, mock mode)
-lives here and is read from environment variables, so you never edit code to switch
-environments.
+Everything that can change per environment (model ids, device, thresholds, mock mode, the
+Hugging Face token) lives here and is read from environment variables or a local `.env`
+file, so you never edit code to switch environments.
 """
 
 import os
@@ -12,15 +12,78 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _load_dotenv() -> None:
+    """Load `KEY=VALUE` lines from a project-local `.env` file (created by you, never committed).
+
+    Real environment variables always win, so `set HF_TOKEN=...` still overrides the file.
+    """
+    env_file = BASE_DIR / ".env"
+    if not env_file.exists():
+        return
+    for raw in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+# Read `.env` first so HF_TOKEN is in place before huggingface_hub / transformers are imported.
+_load_dotenv()
+
+# Xet keeps a second, large shard cache and is fragile on OneDrive / network drives. The classic
+# HTTP downloader is smaller and more reliable for the few small models used here.
+# Set HF_HUB_DISABLE_XET=0 to opt back in.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 # ---------------------------------------------------------------------------
-# Local model cache: every downloaded weight lives INSIDE the project so the
-# server can run fully offline. `download_models.py` fills this cache; set
-# MMS_OFFLINE=1 to forbid any network access at load time.
+# Local model cache - one tidy folder per model, easy to inspect and delete:
+#
+#   model_cache/
+#   ├── trocr-small-printed/   # config.json, model.safetensors, tokenizer files ...
+#   └── yolos-tiny/            # config.json, model.safetensors, preprocessor_config.json
+#
+# `download_models.py` fills these folders. RapidOCR ships its (tiny, ~16 MB) ONNX weights
+# inside the installed package, so it needs no folder here.
 # ---------------------------------------------------------------------------
 MODEL_CACHE_DIR = Path(os.environ.get("MMS_MODEL_CACHE", BASE_DIR / "model_cache"))
 MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("HF_HOME", str(MODEL_CACHE_DIR / "hf"))
-os.environ.setdefault("HF_HUB_CACHE", str(MODEL_CACHE_DIR / "hf" / "hub"))
+
+
+def model_dir(name: str) -> Path:
+    """The folder a given model is downloaded into, e.g. `model_cache/trocr-small-printed`."""
+    return MODEL_CACHE_DIR / name
+
+
+def _has_weights(path: Path) -> bool:
+    """True when `path` looks like a finished `save_pretrained` folder."""
+    if not (path / "config.json").exists():
+        return False
+    return any(path.glob("*.safetensors")) or any(path.glob("*.bin"))
+
+
+def resolve_hf_source(hf_id: str, name: str) -> str:
+    """Prefer the pre-downloaded project-local folder; fall back to the Hub id if it is missing."""
+    local = model_dir(name)
+    return str(local) if _has_weights(local) else hf_id
+
+
+def hf_token() -> str | None:
+    """The Hugging Face token used to download models.
+
+    Resolution order: `HF_TOKEN` env var -> `HUGGING_FACE_HUB_TOKEN` env var -> the token saved
+    by `hf auth login` (also readable from the project-local `.env` file).
+    """
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token:
+        return token.strip()
+    try:
+        from huggingface_hub import get_token
+
+        return get_token()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _flag(name: str, default: bool = False) -> bool:
@@ -78,29 +141,29 @@ class OCRModelSpec:
     devices: tuple[str, ...]  # devices this model may run on
 
 
-# The server ships exactly TWO OCR models (both run locally):
-#   - rapidocr          : CPU only (ONNX Runtime), reads the whole page at once
-#   - trocr-base-printed: CPU or GPU (PyTorch), reads one printed text line at a time
+# The server ships exactly TWO OCR models, both LIGHTWEIGHT and both run locally:
+#   - rapidocr           : CPU only (ONNX Runtime), ~16 MB, reads the whole page at once
+#   - trocr-small-printed: CPU or GPU (PyTorch), ~62M params (~246 MB), reads one line at a time
 OCR_MODELS: dict[str, OCRModelSpec] = {
     "rapidocr": OCRModelSpec(
         name="rapidocr",
         engine="rapidocr",
         hf_id=None,
         kind="document",
-        description="RapidOCR (ONNX Runtime) — fast CPU OCR, detects and reads all text on the page",
+        description="RapidOCR (ONNX Runtime) - fast, tiny CPU OCR; detects and reads all text on the page",
         devices=("cpu",),
     ),
-    "trocr-base-printed": OCRModelSpec(
-        name="trocr-base-printed",
+    "trocr-small-printed": OCRModelSpec(
+        name="trocr-small-printed",
         engine="trocr",
-        hf_id="microsoft/trocr-base-printed",
+        hf_id="microsoft/trocr-small-printed",
         kind="line",
-        description="TrOCR base (printed) — printed text per line, accurate transformer (~334M)",
+        description="TrOCR small (printed) - printed text per line, light transformer (~62M)",
         devices=("cpu", "cuda"),
     ),
 }
 
-DETECTION_HF_ID = "hustvl/yolos-tiny"  # object detection, very light
+DETECTION_HF_ID = "hustvl/yolos-tiny"  # object detection, very light (~26 MB)
 
 
 @dataclass(frozen=True)

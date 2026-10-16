@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from core.config import OCRModelSpec, offline_only
+from core.config import OCRModelSpec, hf_token, offline_only, resolve_hf_source
 
 
 def _free_memory() -> None:
@@ -90,11 +90,17 @@ class TrOCRLineModel:
         from transformers import AutoImageProcessor, AutoTokenizer, VisionEncoderDecoderModel
 
         local_files_only = offline_only()
+        token = hf_token()
+        source = resolve_hf_source(self.hf_id, self.spec.name)
         self._torch = torch
-        self._processor = AutoImageProcessor.from_pretrained(self.hf_id, local_files_only=local_files_only)
-        self._tokenizer = AutoTokenizer.from_pretrained(self.hf_id, local_files_only=local_files_only)
+        self._processor = AutoImageProcessor.from_pretrained(
+            source, local_files_only=local_files_only, token=token
+        )
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            source, local_files_only=local_files_only, token=token
+        )
         self._model = VisionEncoderDecoderModel.from_pretrained(
-            self.hf_id, local_files_only=local_files_only
+            source, local_files_only=local_files_only, token=token
         ).to(self.device)
         self._model.eval()
 

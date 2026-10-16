@@ -5,7 +5,7 @@ from __future__ import annotations
 import gc
 from typing import Any
 
-from core.config import DETECTION_HF_ID, offline_only
+from core.config import DETECTION_HF_ID, hf_token, offline_only, resolve_hf_source
 
 
 class ObjectDetector:
@@ -26,9 +26,10 @@ class ObjectDetector:
         device_index = 0 if self.device == "cuda" else -1
         self._pipe = pipeline(
             "object-detection",
-            model=self.hf_id,
+            model=resolve_hf_source(self.hf_id, self.name),
             device=device_index,
             local_files_only=offline_only(),
+            token=hf_token(),
         )
 
     def predict(self, image, threshold: float = 0.5) -> list[dict]:
