@@ -1,5 +1,9 @@
 # Part 6 — Multi-model AI Server
 
+> **Not part of the FastAPI lesson.** This OCR project (model registry, image upload, several
+> models) was cut from the lesson because it goes beyond the class scope. It is kept here as-is for
+> later reuse.
+
 ## 1. Introduction
 
 A real AI server serves **many tasks**: OCR, classification, detection. Some models are heavy,
