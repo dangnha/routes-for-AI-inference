@@ -5,7 +5,7 @@
 > A model is not a simple calculation. It must be **loaded**, given input in the right
 > **feature format**, and run through **inference**.
 
-In Part 1 the endpoint just called `calculate_bmi()`. Here we replace it with a **pretrained ML
+In Part 1 the endpoint just called `get_items()`. Here we replace it with a **pretrained ML
 model** (Logistic Regression on the Iris dataset) and handle three extra things: load the model,
 format the input, and call the model.
 
@@ -23,7 +23,7 @@ So the server **never retrains per request**; it **loads `model.pkl` once** at s
 ## 2. Setup guide
 
 ```bash
-cd serve-model
+cd 02-serve-model
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
@@ -35,14 +35,7 @@ python train_model.py            # creates model.pkl (run once)
 uvicorn main:app --reload --port 8001
 ```
 
-In a second terminal:
-
-```bash
-streamlit run app.py
-```
-
 - Swagger UI: <http://127.0.0.1:8001/docs> → `POST /predict` → **Try it out**.
-- Streamlit UI: <http://localhost:8501>.
 
 Example request/response:
 
@@ -55,10 +48,9 @@ Example request/response:
 ## 3. Code structure
 
 ```
-serve-model/
+02-serve-model/
 ├── train_model.py     # TRAINING: fit + save model.pkl (run once)
 ├── main.py            # INFERENCE: FastAPI app, load model once, POST /predict
-├── app.py             # Streamlit UI (client)
 ├── requirements.txt
 └── model.pkl          # produced by train_model.py
 ```
@@ -85,7 +77,7 @@ client [features] ──► np.array (1, 4) ──► predict() / predict_proba(
 ### The role of a "service"
 
 Notice `run_inference()`: it keeps prediction logic out of the endpoint. In Part 2 this is just a
-concept; **Part 4** formalizes it into `services/` and `models/` folders.
+concept; **Part 3.5** (`03-architecture`) formalizes it into `services/` and `models/` folders.
 
 ### Bring your own model
 
