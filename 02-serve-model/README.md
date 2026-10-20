@@ -77,7 +77,7 @@ client [features] ──► np.array (1, 4) ──► predict() / predict_proba(
 ### The role of a "service"
 
 Notice `run_inference()`: it keeps prediction logic out of the endpoint. In Part 2 this is just a
-concept; **Part 3.5** (`03-architecture`) formalizes it into `services/` and `models/` folders.
+concept; **Part 4** (`03-architecture`) formalizes it into `services/` and `models/` folders.
 
 ### Bring your own model
 

@@ -17,7 +17,6 @@ ml_state: dict[str, Any] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ---- STARTUP ----
     if not MODEL_PATH.exists():
         raise RuntimeError(f"{MODEL_PATH.name} not found. Run `python train_model.py` first.")
     with open(MODEL_PATH, "rb") as f:
@@ -25,7 +24,7 @@ async def lifespan(app: FastAPI):
     ml_state["meta"] = json.loads(META_PATH.read_text(encoding="utf-8"))
     print("[startup] model loaded once and ready.")
     yield
-    # ---- SHUTDOWN ----
+    # shutdown
     ml_state.clear()
     print("[shutdown] model released.")
 

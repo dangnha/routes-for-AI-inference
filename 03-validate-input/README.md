@@ -9,7 +9,7 @@ Right now the API accepts invalid data, and the input-checking logic is mixed wi
 logic. We need one place to **declare** what valid input looks like, and let the framework check it.
 
 This part also swaps `@app.post(...)` for an **`APIRouter`**: related routes are collected on a
-router and the app includes it once. Tiny change here, but it is what makes Part 3.5 possible
+router and the app includes it once. Tiny change here, but it is what makes Part 4 possible
 (the router moves to its own file).
 
 ```

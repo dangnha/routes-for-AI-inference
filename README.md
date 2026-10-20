@@ -14,8 +14,8 @@ The lesson has five parts. Each folder is self-contained, with its own `README.m
 | 1 | [`01-simple-api/`](./01-simple-api) | Turn a plain **Python function** into an API: GET, path and query parameters, JSON body | 8000 |
 | 2 | [`02-serve-model/`](./02-serve-model) | Serve a **pretrained ML model** (Logistic Regression / Iris), load it once with `lifespan` | 8001 |
 | 3 | [`03-validate-input/`](./03-validate-input) | **Validate input** with a Pydantic schema (HTTP 422) and group routes with `APIRouter` | 8002 |
-| 3.5 | [`03-architecture/`](./03-architecture) | **Organize the code** into routers / schemas / services / models, same API as Part 3 | 8003 |
-| 4 | [`04-response-contract/`](./04-response-contract) | **Response contract**: `response_model`, one error shape, status codes 200/400/404/422/500 | 8004 |
+| 4 | [`03-architecture/`](./03-architecture) | **Organize the code** into routers / schemas / services / models, same API as Part 3 | 8003 |
+| 5 | [`04-response-contract/`](./04-response-contract) | **Response contract**: `response_model`, one error shape, status codes 200/400/404/422/500 | 8004 |
 
 [`05-multi-model-server/`](./05-multi-model-server) is an OCR project (model registry, image upload,
 several models). It is **not part of this lesson** and is kept for later reuse; see its own README.

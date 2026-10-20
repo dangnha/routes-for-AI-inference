@@ -1,4 +1,4 @@
-# Part 4 — Design a Stable Response Contract
+# Part 5 — Design a Stable Response Contract
 
 ## 1. Introduction
 

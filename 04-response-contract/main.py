@@ -1,5 +1,5 @@
 """
-Part 4 - Design a stable response contract
+Part 5 - Design a stable response contract
 response_model fixes the shape of every success response,
 and the exception handlers give every error one shape: {"error": {"code", "message"}}.
 
