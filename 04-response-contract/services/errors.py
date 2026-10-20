@@ -1,4 +1,4 @@
-"""Domain errors - raised by the service, mapped to HTTP status codes in main.py."""
+"""Errors raised by the service. main.py maps them to status codes."""
 
 
 class LowConfidenceError(Exception):

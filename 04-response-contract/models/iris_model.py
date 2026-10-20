@@ -1,4 +1,4 @@
-"""MODEL LAYER — load + predict. Trả "kết quả inference" thô (nội bộ)."""
+"""Load the sklearn model and run predictions. Returns the raw inference result."""
 
 import json
 import pickle
@@ -28,10 +28,6 @@ class IrisModel:
         self._target_names = []
 
     def predict(self, features: list[float]) -> dict:
-        """
-        Kết quả INFERENCE nội bộ. Chú ý: có field `raw_scores` — client KHÔNG cần
-        thấy trường này. Nó sẽ bị response_model loại bỏ ở tầng router.
-        """
         x = np.asarray(features, dtype=float).reshape(1, -1)
         index = int(self._model.predict(x)[0])
         scores = self._model.predict_proba(x)[0]
@@ -39,7 +35,7 @@ class IrisModel:
             "class_index": index,
             "class_name": self._target_names[index],
             "scores": {n: float(p) for n, p in zip(self._target_names, scores)},
-            "raw_scores": self._model.decision_function(x)[0].tolist(),  # nội bộ
+            "raw_scores": self._model.decision_function(x)[0].tolist(),  # internal only
         }
 
     @property

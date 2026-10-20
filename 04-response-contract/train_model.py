@@ -1,4 +1,4 @@
-"""TRAINING — chạy 1 lần để tạo model.pkl cho Phần 5."""
+"""Train the Iris model once and save it to model.pkl."""
 
 import json
 import pickle

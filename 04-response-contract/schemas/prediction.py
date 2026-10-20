@@ -1,10 +1,8 @@
-"""SCHEMA LAYER - keep the REQUEST schema and the RESPONSE schema separate."""
+"""Request and response schemas, kept separate."""
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# ===========================================================================
-# REQUEST schema - data the client SENDS
-# ===========================================================================
+# Request: what the client sends
 class IrisFeatures(BaseModel):
     sepal_length: float = Field(..., gt=0, le=20, description="Sepal length (cm)")
     sepal_width: float = Field(..., gt=0, le=20, description="Sepal width (cm)")
@@ -23,17 +21,13 @@ class IrisFeatures(BaseModel):
         return [self.sepal_length, self.sepal_width, self.petal_length, self.petal_width]
 
 
-# ===========================================================================
-# RESPONSE schemas - data we PROMISE to return. This is the contract.
-# ===========================================================================
+# Response: what we promise to return
 class ProbabilityItem(BaseModel):
     label: str
     probability: float = Field(..., ge=0, le=1)
 
 
 class PredictionResponse(BaseModel):
-    """Response contract for /predict. Clients can rely on this structure."""
-
     model: str
     predicted_label: str
     predicted_class: int
@@ -47,6 +41,4 @@ class ErrorDetail(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """Response contract for EVERY error."""
-
     error: ErrorDetail

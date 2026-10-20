@@ -1,4 +1,4 @@
-"""SERVICE LAYER - business logic. Maps the inference result to the response contract."""
+"""Business logic: turn the model result into the response shape."""
 
 from models.iris_model import IrisModel
 from schemas.prediction import IrisFeatures
@@ -10,7 +10,7 @@ class PredictionService:
         self._model = model
 
     def predict(self, payload: IrisFeatures, min_confidence: float = 0.0) -> dict:
-        raw = self._model.predict(payload.to_vector())  # internal inference result
+        raw = self._model.predict(payload.to_vector())
         scores: dict[str, float] = raw["scores"]
         best_label = max(scores, key=scores.get)
         confidence = scores[best_label]
@@ -27,7 +27,7 @@ class PredictionService:
             "probabilities": [
                 {"label": label, "probability": round(score, 4)} for label, score in scores.items()
             ],
-            # Internal field, NOT part of the contract -> removed by response_model.
+            # Not in PredictionResponse, so response_model drops it.
             "debug_raw_scores": raw["raw_scores"],
         }
 

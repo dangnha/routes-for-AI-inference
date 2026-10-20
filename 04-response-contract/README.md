@@ -1,4 +1,4 @@
-# Part 5 — Design a Stable Response Contract
+# Part 4 — Design a Stable Response Contract
 
 ## 1. Introduction
 
@@ -19,7 +19,7 @@ Three things to distinguish:
 ## 2. Setup guide
 
 ```bash
-cd response-contract
+cd 04-response-contract
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
@@ -31,27 +31,19 @@ python train_model.py
 uvicorn main:app --reload --port 8004
 ```
 
-In a second terminal:
-
-```bash
-streamlit run app.py
-```
-
-- Streamlit playground: five buttons, one per status code.
 - Swagger UI: <http://127.0.0.1:8004/docs> — open `POST /predict` and check the **Responses** section.
 
 ## 3. Code structure
 
 ```
-response-contract/
+04-response-contract/
 ├── main.py                      # app + ERROR HANDLERS (map errors -> status + JSON)
-├── routers/prediction.py        # endpoints + response_model
+├── routers/prediction.py        # APIRouter: /health, /predict, /models/{id}, /debug/boom
 ├── schemas/prediction.py        # request schema + response schemas + error schema
 ├── services/
 │   ├── prediction_service.py    # business logic, raises LowConfidenceError
 │   └── errors.py                # domain errors
 ├── models/iris_model.py         # load + predict (returns the internal result)
-├── app.py                       # Streamlit UI (status-code playground)
 └── requirements.txt
 ```
 
