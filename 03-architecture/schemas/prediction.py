@@ -1,4 +1,4 @@
-"""SCHEMA LAYER - define the structure of incoming/outgoing data."""
+"""Pydantic shapes of the data coming in."""
 
 from pydantic import BaseModel, ConfigDict, Field
 

@@ -1,4 +1,4 @@
-"""ROUTER LAYER - declare endpoints and handle HTTP."""
+"""Endpoints: read the request, call the service."""
 
 from fastapi import APIRouter, Depends, Request
 
@@ -9,7 +9,7 @@ router = APIRouter(tags=["prediction"])
 
 
 def get_service(request: Request) -> PredictionService:
-    """Dependency: fetch the service built at startup (stored on app.state)."""
+    """Return the service built at startup."""
     return request.app.state.prediction_service
 
 

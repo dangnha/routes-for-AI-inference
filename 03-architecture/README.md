@@ -1,4 +1,4 @@
-# Part 4 — Source Code Architecture
+# Part 3.5 — Organizing Source Code
 
 ## 1. Introduction
 
@@ -6,7 +6,7 @@
 > maintain and change. So we split the code by responsibility.
 
 This part is a **pure refactor of Part 3**: the behaviour is identical, only the file layout
-changes. Compare `architecture/main.py` with `validate-input/main.py` - same schema, same endpoint,
+changes. Compare `03-architecture/main.py` with `03-validate-input/main.py` - same schema, same endpoint,
 same response. The router that Part 3 introduced now lives in its own module under `routers/`.
 
 | Layer | Responsibility | Must NOT |
@@ -23,7 +23,7 @@ break outer layers (the endpoint stays the same).
 ## 2. Setup guide
 
 ```bash
-cd architecture
+cd 03-architecture
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
@@ -35,26 +35,18 @@ python train_model.py
 uvicorn main:app --reload --port 8003
 ```
 
-In a second terminal:
-
-```bash
-streamlit run app.py
-```
-
 - Swagger UI: <http://127.0.0.1:8003/docs>
-- Streamlit UI: <http://localhost:8501>
 
 ## 3. Code structure
 
 ```
-architecture/
+03-architecture/
 ├── main.py                       # create app + register routers + model lifecycle
 ├── routers/prediction.py         # declare endpoints, handle HTTP
 ├── schemas/prediction.py         # data structures (Pydantic)
 ├── services/prediction_service.py# business logic, orchestrate inference
 ├── models/iris_model.py          # load model + run predictions
 ├── train_model.py
-├── app.py                        # Streamlit UI (client)
 └── requirements.txt
 ```
 

@@ -1,33 +1,16 @@
 """
-Part 4 - Source code architecture
-=================================
-Problem: as we add models, endpoints and validation, `main.py` grows into a long file that is hard
-to read and maintain. We split the code by responsibility (layer).
+Part 3.5 - Organizing source code
+Same API as 03-validate-input, split into files by responsibility:
 
-Pure refactor: this is Part 3's code (validate-input), unchanged in behaviour, just spread across
-files. The router Part 3 introduced now lives in `routers/prediction.py`.
-
-    main.py    -> create the app and register routers (no business logic)
-    routers/   -> declare endpoints and handle HTTP (request/response)
-    schemas/   -> define data structures (Pydantic)
-    services/  -> business logic, orchestrate inference
+    main.py    -> create the app and register routers
+    routers/   -> endpoints, HTTP in and out
+    schemas/   -> Pydantic data shapes
+    services/  -> business logic
     models/    -> load the model and run predictions
 
-Request flow for POST /predict
-------------------------------
-    HTTP request
-        v
-    routers/prediction.py            (read the body, call the service)
-        v
-    services/prediction_service.py   (schema -> feature vector)
-        v
-    models/iris_model.py             (loaded at startup, run sklearn predict)
-
-Run (from the architecture/ folder):
+Run:
     python train_model.py
     uvicorn main:app --reload --port 8003
-UI:
-    streamlit run app.py
 """
 
 from contextlib import asynccontextmanager
@@ -44,12 +27,9 @@ BASE_DIR = Path(__file__).parent
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # MODEL LAYER: load the model once.
+    # Load the model once, then build the service around it.
     iris_model = IrisModel(BASE_DIR / "model.pkl", BASE_DIR / "model_meta.json")
     iris_model.load()
-
-    # SERVICE LAYER: build the service around that model.
-    app.state.iris_model = iris_model
     app.state.prediction_service = PredictionService(iris_model)
 
     print("[startup] model + service ready")
@@ -60,12 +40,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Architecture - routers / schemas / services / models",
-    description="Part 4: split the source code into layers.",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# ROUTER LAYER: register endpoint groups. A new model -> include_router another module.
 app.include_router(prediction.router)
 
 
