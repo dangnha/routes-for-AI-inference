@@ -1,37 +1,47 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 
-# ---------------------------------------------------------------------------
-# 1) The plain Python function - this is the logic we want to share.
-#    It is just Python, it knows nothing about HTTP.
-# ---------------------------------------------------------------------------
 def get_items() -> list[str]:
     """Return an arbitrary list of items."""
     return ["apple", "banana", "cherry", "durian", "elderberry"]
 
 
-# ---------------------------------------------------------------------------
-# 2) Expose the function behind an API. `app` is the server object.
-# ---------------------------------------------------------------------------
-app = FastAPI(
-    title="Simple API - List",
-    description="Part 1: turn a plain Python function into an API with FastAPI.",
-    version="1.0.0",
-)
+app = FastAPI(title="Simple API - List", version="1.0.0")
+
+# One list shared by every route, so items added with POST show up in GET.
+ITEMS = get_items()
 
 
-# ---------------------------------------------------------------------------
-# 3) Endpoint (route): maps a URL + HTTP method to a Python function.
-#    A basic GET: no parameters, no request body.
-#    GET /items runs get_items() and returns the list as a JSON array.
-# ---------------------------------------------------------------------------
-@app.get(
-    "/items",
-    summary="Return a list of items",
-    description="A basic GET endpoint: no parameters, no body. Returns a plain JSON array.",
-)
+@app.get("/items", summary="Return a list of items")
 def items_endpoint() -> list[str]:
-    return get_items()
+    return ITEMS
+
+
+# Path parameter: /items/2
+@app.get("/items/{item_id}", summary="Return one item by its index")
+def read_item(item_id: int):
+    if not 0 <= item_id < len(ITEMS):
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item_id": item_id, "item": ITEMS[item_id]}
+
+
+# Query parameters: /search?q=an&limit=1
+@app.get("/search", summary="Search items by text")
+def search(q: str, limit: int = 3):
+    hits = [i for i in ITEMS if q in i]
+    return hits[:limit]
+
+
+# Request body: {"name": "fig"}
+class NewItem(BaseModel):
+    name: str
+
+
+@app.post("/items", status_code=201, summary="Add an item")
+def add_item(item: NewItem):
+    ITEMS.append(item.name)
+    return {"added": item.name, "count": len(ITEMS)}
 
 
 @app.get("/health", summary="Liveness check")
