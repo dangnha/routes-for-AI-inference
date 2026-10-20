@@ -9,7 +9,7 @@ Right now the API accepts invalid data, and the input-checking logic is mixed wi
 logic. We need one place to **declare** what valid input looks like, and let the framework check it.
 
 This part also swaps `@app.post(...)` for an **`APIRouter`**: related routes are collected on a
-router and the app includes it once. Tiny change here, but it is what makes Part 4 possible
+router and the app includes it once. Tiny change here, but it is what makes Part 3.5 possible
 (the router moves to its own file).
 
 ```
@@ -28,7 +28,7 @@ client ──POST /predict──►  JSON body { "sepal_length": 5.1, ... }
 ## 2. Setup guide
 
 ```bash
-cd validate-input
+cd 03-validate-input
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
@@ -40,23 +40,15 @@ python train_model.py
 uvicorn main:app --reload --port 8002
 ```
 
-In a second terminal:
-
-```bash
-streamlit run app.py
-```
-
 - Swagger UI: <http://127.0.0.1:8002/docs> — the schema shows all four fields with descriptions.
   Use **Try it out**, delete a field, and **Execute** to see the **422** error.
-- Streamlit UI: buttons for valid, missing, wrong-type and negative input.
 
 ## 3. Code structure
 
 ```
-validate-input/
+03-validate-input/
 ├── main.py            # the WHOLE API in one file: schema + model + APIRouter + endpoint
 ├── train_model.py     # one-off training script (not part of the API)
-├── app.py             # Streamlit UI (client)
 └── requirements.txt
 ```
 

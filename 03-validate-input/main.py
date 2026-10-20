@@ -22,27 +22,13 @@ async def lifespan(app: FastAPI):
     ml_state.clear()
 
 
-app = FastAPI(
-    title="Validate Input with Pydantic",
-    description="Part 3: use a Pydantic schema to validate the request body.",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="Validate Input with Pydantic", version="1.0.0", lifespan=lifespan)
 
-
-# ===========================================================================
-# ROUTER - a group of endpoints. Declared here, included into `app` at the bottom.
-# A router keeps related routes together so they can later move to another file.
-# ===========================================================================
+# A router groups related endpoints. It is added to the app at the bottom.
 router = APIRouter(tags=["prediction"])
 
 
-# ===========================================================================
-# REQUEST SCHEMA - the contract for the data clients send.
-# Each field has a name, a type and constraints. FastAPI uses this schema to:
-#   1) validate automatically (invalid -> 422),
-#   2) render the form in Swagger UI.
-# ===========================================================================
+# Request schema: invalid bodies get a 422 before predict() runs.
 class IrisFeatures(BaseModel):
     """Request body for /predict. Four positive floats."""
 
@@ -60,20 +46,11 @@ class IrisFeatures(BaseModel):
     )
 
     def to_vector(self) -> list[float]:
-        """Convert the schema into the feature vector the model expects."""
+        """Feature order the model expects."""
         return [self.sepal_length, self.sepal_width, self.petal_length, self.petal_width]
 
 
-# ===========================================================================
-# ENDPOINT - the `payload: IrisFeatures` argument makes FastAPI validate the body.
-# If the body is invalid, this function is NEVER called; FastAPI returns 422 first.
-# It is registered on the ROUTER, not directly on `app`.
-# ===========================================================================
-@router.post(
-    "/predict",
-    summary="Predict the Iris species (with input validation)",
-    responses={422: {"description": "Request body does not match the IrisFeatures schema"}},
-)
+@router.post("/predict", summary="Predict the Iris species (with input validation)")
 def predict(payload: IrisFeatures):
     model = ml_state["model"]
     x = np.asarray(payload.to_vector(), dtype=float).reshape(1, -1)
@@ -89,7 +66,6 @@ def predict(payload: IrisFeatures):
     }
 
 
-# Register the router's routes on the app (one line per group of endpoints).
 app.include_router(router)
 
 
